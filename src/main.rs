@@ -1,85 +1,109 @@
 use std::env;
-use std::fs;
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, BufRead, Write};
+use std::path::Path;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    let mut input_file = String::new();
+    let mut output_file = String::new();
 
-    if args.len() > 1 {
-        match args[1].as_str() {
+    if args.len() == 1 {
+        print_usage();
+        return;
+    }
+
+    // Parse command-line arguments
+    for i in 1..args.len() {
+        match args[i].as_str() {
+            "-v" | "--version" => {
+                println!("faq2fc version 1.0.0");
+                return;
+            }
             "-h" | "--help" => {
                 print_usage();
-            }
-            "-v" | "--version" => {
-                print_version();
+                return;
             }
             "-o" | "--output" => {
-                if args.len() < 4 {
-                    println!("Error: Output file not specified.");
-                    print_usage();
-                } else {
-                    let input_file = &args[2];
-                    let output_file = &args[3];
-                    if let Err(err) = convert_to_fine_tuning_json(input_file, output_file) {
-                        println!("Error: {}", err);
-                    }
+                if i + 1 < args.len() {
+                    output_file = args[i + 1].clone();
                 }
             }
             _ => {
-                let input_file = &args[1];
-                let output_file = &format!("{}.json", input_file);
-                if let Err(err) = convert_to_fine_tuning_json(input_file, output_file) {
-                    println!("Error: {}", err);
+                if input_file.is_empty() {
+                    input_file = args[i].clone();
                 }
             }
         }
-    } else {
-        print_usage();
     }
-}
 
-fn convert_to_fine_tuning_json(input_file: &str, output_file: &str) -> io::Result<()> {
-    let input_content = fs::read_to_string(input_file)?;
-    let mut output_content = String::new();
+    if input_file.is_empty() {
+        println!("Error: Input file not specified.");
+        print_usage();
+        return;
+    }
 
-    let mut lines = input_content.lines();
-    let mut prompt = String::new();
+    // If output file is not specified, use input_file.json
+    if output_file.is_empty() {
+        let input_path = Path::new(&input_file);
+        let file_stem = input_path.file_stem().unwrap();
+        let file_stem_str = file_stem.to_str().unwrap();
+        output_file = format!("{}.json", file_stem_str);
+    }
 
-    while let Some(line) = lines.next() {
-        if line.starts_with("## ") {
-            if !prompt.is_empty() {
-                output_content.push_str(&format!("{{\"prompt\": \"{}\", \"completion\": \"{}\"}}\n", prompt, line[3..].trim()));
+    // Read input file
+    if let Ok(lines) = read_lines(&input_file) {
+        let mut prompt = String::new();
+        let mut output_data = String::new();
+
+        for line in lines {
+            if let Ok(line_content) = line {
+                if line_content.starts_with("## ") {
+                    prompt = line_content.replace("## ", "").trim().to_string();
+                } else if line_content.starts_with("### ") {
+                    let completion = line_content.replace("### ", "").trim().to_string();
+                    let json_entry = format!(
+                        "{{\"prompt\": \"{}\", \"completion\": \"{}\"}}\n",
+                        prompt, completion
+                    );
+                    output_data.push_str(&json_entry);
+                }
             }
-            prompt = line[3..].trim().to_string();
-        } else if line.starts_with("### ") {
-            let completion = line[4..].trim();
-            output_content.push_str(&format!("{{\"prompt\": \"{}\", \"completion\": \"{}\"}}\n", prompt, completion));
-        } else if line.starts_with("#### ") {
-            output_content.push_str(&format!("// {}\n", line[5..].trim()));
-        } else {
-            output_content.push_str(&format!("// {}\n", line.trim()));
+        }
+
+        // Write output to file
+        if let Err(e) = write_output_file(&output_file, &output_data) {
+            println!("Error writing to output file: {}", e);
+            return;
         }
     }
 
-    if !prompt.is_empty() {
-        output_content.push_str(&format!("{{\"prompt\": \"<prompt text>\", \"completion\": \"<ideal generated text>\"}}\n"));
+    // Helper function to print the usage instructions
+    fn print_usage() {
+        println!("Usage: faq2fc [OPTIONS] <input_file>");
+        println!();
+        println!("Options:");
+        println!("-v, --version   Display version information");
+        println!("-h, --help      Display usage instructions");
+        println!("-o, --output    Specify an output file");
     }
 
-    let mut output_file = fs::File::create(output_file)?;
-    output_file.write_all(output_content.as_bytes())?;
+    // Helper function to read lines from a file
+    fn read_lines<P>(filename: &P) -> io::Result<io::Lines<io::BufReader<File>>>
+    where
+        P: AsRef<Path>,
+    {
+        let file = File::open(filename)?;
+        Ok(io::BufReader::new(file).lines())
+    }
 
-    println!("Conversion completed successfully.");
-    Ok(())
-}
-
-fn print_usage() {
-    println!("Usage: faq2fc [OPTIONS] [INPUT_FILE]");
-    println!("Options:");
-    println!("  -h, --help           Display usage instructions.");
-    println!("  -v, --version        Display version information.");
-    println!("  -o, --output FILE    Specify an output file.");
-}
-
-fn print_version() {
-    println!("faq2fc version 1.0");
+    // Helper function to write output to a file
+    fn write_output_file<P>(filename: &P, data: &str) -> io::Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        let mut file = File::create(filename)?;
+        file.write_all(data.as_bytes())?;
+        Ok(())
+    }
 }
